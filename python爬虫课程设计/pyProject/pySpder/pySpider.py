@@ -1,3 +1,4 @@
+import matplotlib
 import openpyxl
 import pymysql
 from selenium.webdriver import Chrome
@@ -6,6 +7,7 @@ import time
 import requests
 from lxml import etree
 from multiprocessing import Pool,cpu_count,freeze_support
+import matplotlib.pyplot as plt
 
 #线程池是个什么东西，简单来说就是个分配任务的机器，不是说线程越多越好，有100个任务的话，那么开3个子线程，线程池是作用就是讲这100个任务丢进去让他运行，他们运行完之后就重新给他们分配任务，直到100个任务全部完成。
 #开多个线程会消耗电脑的运存；
@@ -32,7 +34,7 @@ def writeIntoDataBase(datalist,spiderNum):
     for data in datalist:
         if i>=spiderNum:
             break
-        sql="INSERT INTO spiderdata (title,author,content,keyword,publishedtime,linkurl) values ('%s','%s','%s','%s','%s','%s')"%(pymysql.converters.escape_string(data[0]),pymysql.converters.escape_string(data[1]),pymysql.converters.escape_string(data[2]),pymysql.converters.escape_string(data[3]),pymysql.converters.escape_string(data[4]),pymysql.converters.escape_string(data[5]))
+        sql="INSERT INTO spiderdata (title,author,content,keyword,publishedtime,linkurl,readcount) values ('%s','%s','%s','%s','%s','%s','%s')"%(pymysql.converters.escape_string(data[0]),pymysql.converters.escape_string(data[1]),pymysql.converters.escape_string(data[2]),pymysql.converters.escape_string(data[3]),pymysql.converters.escape_string(data[4]),pymysql.converters.escape_string(data[5]),pymysql.converters.escape_string(data[6]))
         cursor.execute(sql) #sql语句被执行
         i = i + 1
     db.commit()  # 写入数据，提交才能执行
@@ -54,11 +56,12 @@ def Collect_information(url,key):
     # createtime="" # 创作时间
     response=requests.get(url=url,headers=headers).text
     rtree=etree.HTML(response)
-    title=rtree.xpath('//*[@id="articleContentId"]/text()') # 标题
+    title=rtree.xpath('//*[@id="articleContentId"]/text()')[0] # 标题
     author= rtree.xpath('//*[@id="mainBox"]/main/div[1]/div[1]/div/div[2]/div[1]/div/a[1]/text()') # 作者
-    print(title)
+    print("文章标题："+title)
     createtime = rtree.xpath('//span[@class="time"]/text()')[0] # 创作时间
-    contentList = rtree.xpath('//*[@id="article_content"]//text()')
+    contentList = rtree.xpath('//*[@id="article_content"]//text()') # 内容
+    readcount=rtree.xpath('//*[@class="read-count"]/text()')[0] # 阅读量
     linkurl = url  # 链接地址
     contentList = [str(i) for i in contentList]
     # 转换成str字符串，否则还是list列表类型
@@ -66,6 +69,7 @@ def Collect_information(url,key):
     title=str(title)
     author=str(author)
     createtime=str(createtime)
+    readcount=str(readcount)
     # 将only_1_page_data 存储到 datalist中
     only_1_page_data.append(title)
     only_1_page_data.append(author)
@@ -73,6 +77,7 @@ def Collect_information(url,key):
     only_1_page_data.append(keyword)
     only_1_page_data.append(createtime)
     only_1_page_data.append(linkurl)
+    only_1_page_data.append(readcount)
     datalist.append(only_1_page_data)
 
 
@@ -105,6 +110,11 @@ def Rolldown(web):
 # 滚动到底部，并点击加载更多按钮
 def RollClick(web):
     Rolldown(web)  # 需要先滑动到底部，让加载按钮显示出来
+    # js_top = "var q=document.documentElement.scrollTop=0"
+    # web.execute_script(js_top)
+    # js = "window.scrollTo(0,document.body.scrollHeight)"
+    # web.execute_script(js)
+    # time.sleep(2)
     web_Loadmore=web.find_element(By.XPATH,'//*[@id="app"]/div[2]/div[2]/div[1]/div[3]').click()
     time.sleep(2) # 休眠3秒，让数据能同步爬取
 
@@ -116,7 +126,7 @@ def savedate(datalist,savepath,keyword,spiderNum):
     outwb = openpyxl.Workbook()
     outws = outwb.create_sheet(index=0)
     # 表头
-    header = ['标题', '作者', '内容', '关键字','上传时间','对应链接']
+    header = ['标题', '作者', '内容', '关键字','上传时间','对应链接','阅读量']
     datalist.insert(0, header)
     i=0  # 进行数量判定
     for row in datalist:
@@ -196,6 +206,8 @@ def savedate(datalist,savepath,keyword,spiderNum):
 
 # keyWord关键字搜索， spiderNum爬取数量,nb_jobs开启的线程数量
 def Web(keyWord,spiderNum,savepath,nb_jobs)  :
+    datalist.clear() # 每次运行，清空原有数据
+    print(keyWord,spiderNum,savepath,nb_jobs)
     # 创建web-打开-登录-切换-输入-爬取
     web = Chrome()  # 创建谷歌浏览器窗口；此处不适合用无头浏览器，因为这个网页最坑的就是登陆后要是没退出，一直会提醒那在其他地方登陆，这个又要重新打开，所以每次爬取完信息，都要自己手动关闭一下这个页面，否则下一次必定报错，需要手动把登陆信息给删除掉；
     baseUrl="https://so.csdn.net/so/search?q="+keyWord +"&t=blog&u=&tm=365&urw=" # 拼接要查询的关键字
@@ -209,21 +221,21 @@ def Web(keyWord,spiderNum,savepath,nb_jobs)  :
     # 通过xpath获取 与关键词相关的博客文章
     # list=web.find_elements(By.XPATH,'//*[@id="app"]/div[2]/div[2]/div[1]/div[2]/div/div')
     list=web.find_elements_by_class_name("list-item")
-    len=0  # 目前有多少博客文章
-
+    curlen=0  # 目前有多少博客文章
     # 通过链接，获取博客内的相关信息
     linkedurlList=[]
     for data in list:
         href=data.find_element_by_class_name("block-title").get_attribute("href") # 获取链接
         #通过链接获取信息，需要传入链接href以及关键字keyWord，进行后面的存储，在这里可以进行一个多线程
         linkedurlList.append(href)
-        len = len + 1
-        print(href)
-
+        curlen = curlen + 1
+        # print(href)
+    web.close()  # 关闭浏览器
 # 线程池
     pool = ThreadPoolExecutor(max_workers=nb_jobs)
     for url in linkedurlList:
         if nb_jobs<2:
+            print(url)
             Collect_information(url,keyWord)
         else: # 多线程提交任务
             pool.submit(Collect_information,url,keyWord)
@@ -232,10 +244,32 @@ def Web(keyWord,spiderNum,savepath,nb_jobs)  :
 
     writeIntoDataBase(datalist,spiderNum) # 写入数据库中
     savedate(datalist,savepath,keyWord,spiderNum)   #  存储到特定位置，以xlsx文件存储
-    return spiderNum
+    return len(datalist)
 
+# 根据关键字去数据库中查找，进行柱状图分析
+def keyAnalysis():
+    matplotlib.rcParams['font.sans-serif'] = ['KaiTi']
+    x = []
+    db = pymysql.connect(host="localhost", user="root", password="wuwenqin", db="pythonspider")  # 连接数据库
+    cursor = db.cursor()
+    select_sql="select DISTINCT keyword ,SUM(readcount) from spiderdata GROUP BY keyword"
+    cursor.execute(select_sql)
+    result=cursor.fetchall() #结果
+    print(result)
+    labels=[]
+    x=[]
+    for r in result:
+        labels.append(r[0])
+        x.append(r[1])
+    print(labels)
+    fig = plt.figure()
+    plt.pie(x, labels=labels, autopct='%1.2f%%')  # 画饼图（数据，数据对应的标签，百分数保留两位小数点）
+    plt.title("关键字阅读量占比图")
+    plt.show()
+    plt.savefig("keyAnalysis.jpg")
 
-
+if __name__ == '__main__':
+    keyAnalysis()
 # if __name__ == '__main__':
 #     keyWord="数据结构"
 #     Web(keyWord,20)

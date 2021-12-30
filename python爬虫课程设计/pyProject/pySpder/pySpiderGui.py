@@ -1,10 +1,24 @@
+import multiprocessing
+from threading import Thread
+
+from PyQt5.QtCore import pyqtSignal, QObject, QEventLoop, QTimer, QThread
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import QFileDialog
 from PyQt5 import QtCore, QtGui, QtWidgets
 from multiprocessing import Pool,cpu_count,freeze_support
 import sys, os,re,urllib,traceback
 from time import *
-from pySpder.pySpider import Web
+from pySpder.pySpider import Web, keyAnalysis
 import tkinter.messagebox as msg
+import subprocess   # 该模块允许您生成进程，连接到其输入/输出/错误管道  并获取其返回码。
+
+
+class Stream(QObject):
+    """Redirects console output to text widget."""
+    newText = pyqtSignal(str)
+
+    def write(self, text):
+        self.newText.emit(str(text))
 
 
 class Ui_Form(QtWidgets.QWidget):
@@ -16,11 +30,22 @@ class Ui_Form(QtWidgets.QWidget):
         self.start_page=1
         self.dirname=''
         self.word=''
+        sys.stdout = Stream(newText=self.onUpdateText)
         pass
+
+    def onUpdateText(self, text):
+        """Write console output to text widget."""
+        cursor = self.textEdit.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertText(text)
+        self.textEdit.setTextCursor(cursor)
+        self.textEdit.ensureCursorVisible()
+
+
 
     def setupUi(self, Form):
         Form.setObjectName("Form")
-        Form.resize(480, 180)
+        Form.resize(501, 574)
         Form.setWindowIcon(QtGui.QIcon('./cat.ico'))
         self.gridLayout = QtWidgets.QGridLayout(Form)
         self.gridLayout.setObjectName("gridLayout")
@@ -79,6 +104,15 @@ class Ui_Form(QtWidgets.QWidget):
         self.bt_auto_j.setObjectName("bt_auto_j")
         self.bt_auto_j.clicked.connect(self.auto_jobs)
         self.gridLayout.addWidget(self.bt_auto_j, 2, 6, 1, 1)
+        # 列表     
+        self.textEdit = QtWidgets.QTextEdit(Form)
+        self.textEdit.setObjectName("textEdit")
+        self.gridLayout.addWidget(self.textEdit, 3, 0, 1, 7)
+        self.textEdit.ensureCursorVisible()
+        self.pushButton = QtWidgets.QPushButton(Form)
+        self.pushButton.setObjectName("pushButton")
+        self.gridLayout.addWidget(self.pushButton, 0, 5, 1, 1)
+        self.pushButton.clicked.connect(self.analysis)
 
         self.retranslateUi(Form)
         QtCore.QMetaObject.connectSlotsByName(Form)
@@ -94,7 +128,8 @@ class Ui_Form(QtWidgets.QWidget):
         self.label_max.setText(_translate("Form", "最大张数"))
         self.label_jobs.setText(_translate("Form", "线程数"))
         self.bt_auto_j.setText(_translate("Form", "自动选择"))
-    #
+        self.pushButton.setText(_translate("Form", "访问量分析"))
+
     # def dowload_img(self, img_url, dirname, i):
     #     form = img_url.split('.')[-1]
     #     if not (form.lower() in ['jpg', 'png', 'gif']):
@@ -112,6 +147,8 @@ class Ui_Form(QtWidgets.QWidget):
     #         return 0
     #     else:
     #         return 1
+    def analysis(self):
+        keyAnalysis()
 
     def select_dir(self):
         path = QFileDialog.getExistingDirectory(self, '选择保存路径', (self.dirname if self.dirname else './'))
@@ -120,7 +157,23 @@ class Ui_Form(QtWidgets.QWidget):
     def auto_jobs(self):
         self.spin_jobs.setValue(cpu_count())
 
+    def closeEvent(self, event):
+        """Shuts down application on close."""
+        # Return stdout to defaults.
+        sys.stdout = sys.__stdout__
+        super().closeEvent(event)
+
+
     def crawl(self):
+        # 创建 Thread 类的实例对象
+        thread = Thread(
+            # target 参数 指定 新线程要执行的函数
+            # 注意，这里指定的函数对象只能写一个名字，不能后面加括号，
+            # 如果加括号就是直接在当前线程调用执行，而不是在新线程中执行了
+            target=self.crawls)
+        thread.start()
+
+    def crawls(self):
         self.dirname, self.word = self.edit_dir.text(), self.edit_key.text()
         if not self.dirname:
             print('请指定保存目录！')
@@ -129,15 +182,19 @@ class Ui_Form(QtWidgets.QWidget):
                 print('请输入关键词！')
             return
         # mkdir(self.dirname)
-
+        # 定时器
+        # loop = QEventLoop()
+        # QTimer.singleShot(2000, loop.quit)
         #计算程序运行时间
         begin_time=time()
         end_time=None
         run_time=None
+
         self.max_num, self.start_page, self.nb_jobs = self.spin_max.value(), self.spin_start.value(), self.spin_jobs.value()
         if self.nb_jobs < 2:
             print('正在使用单线程下载')
             nb_succeed = Web(self.word, self.max_num,  self.dirname,self.nb_jobs)
+
             # msg._show(title='成功！', message='爬取完毕！\n\n共成功爬取{s}/{e}篇博客文章，保存到文件夹：{d}'.format(s=nb_succeed, e=self.max_num,
             #                                                                               d=self.dirname))
         else:
@@ -148,13 +205,10 @@ class Ui_Form(QtWidgets.QWidget):
         # 程序运行时间计算
         end_time = time()
         run_time = end_time - begin_time
-        print('爬取完毕！\n\n共成功爬取{s}/{e}篇博客文章，保存到文件夹：{d}，运行时间为:{time}'.format(s=nb_succeed, e=self.max_num, d=self.dirname,time=run_time))
-        msg._show(title='成功！', message='爬取完毕！\n\n共成功爬取{s}/{e}篇博客文章，保存到文件夹：{d}，运行时间为:{time}'.format(s=nb_succeed, e=self.max_num, d=self.dirname,time=run_time))
-    def crawl_s(self):
-        nb_succeed = 0
-        # for i, img_url in enumerate(get_img_urls(self.word, self.max_num, self.start_page)):
-        #     nb_succeed += self.dowload_img(img_url, self.dirname, i)
-        # return nb_succeed
+        print('爬取完毕！\n\n共成功爬取{s}/{e}篇博客文章，保存到文件夹：{d}，运行时间为:{time}'.format(s=self.max_num, e=nb_succeed, d=self.dirname,time=run_time))
+        msg._show(title='成功！', message='爬取完毕！\n\n共成功爬取{s}/{e}篇博客文章，保存到文件夹：{d}，运行时间为:{time}'.format(s=self.max_num, e=nb_succeed, d=self.dirname,time=run_time))
+        # loop.exec_()
+
 
 # 爬虫页面初始化
 def pySpiderFrameInit():
